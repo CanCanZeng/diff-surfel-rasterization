@@ -29,7 +29,7 @@
 
 // distortion helper macros
 #define BACKFACE_CULL 1
-#define DUAL_VISIABLE 1
+#define DUAL_VISIABLE 0
 // #define NEAR_PLANE 0.2
 // #define FAR_PLANE 100.0
 #define DETACH_WEIGHT 0
@@ -61,6 +61,12 @@ __device__ const float SH_C3[] = {
 __forceinline__ __device__ float ndc2Pix(float v, int S)
 {
 	return ((v + 1.0) * S - 1.0) * 0.5;
+}
+
+__forceinline__ __device__ float ndc2Pix(float v, int S, float prcp)
+{
+	// return ((v + 1.0) * S - 1.0) * 0.5;
+	return ((v + 1.0) * S - 1.0) * 0.5 + S * (prcp - 0.5);
 }
 
 __forceinline__ __device__ void getRect(const float2 p, int max_radius, uint2& rect_min, uint2& rect_max, dim3 grid)
@@ -205,6 +211,70 @@ __forceinline__ __device__ bool in_frustum(int idx,
 		}
 		return false;
 	}
+	return true;
+}
+
+__forceinline__ __device__ bool in_frustum(
+	float3& p_view,
+	float3& p_proj, 
+	float2& p_pix, 
+	const float* patchbbox,
+	bool prefiltered)
+{
+
+	// if ((p_proj.x < -1.3 || p_proj.x > 1.3 || p_proj.y < -1.3 || p_proj.y > 1.3))
+	// 	printf("p_proj out of frustum! %.8f, %.8f, %.8f\n", p_proj.x, p_proj.y, p_proj.z);
+	// float expand = 1.1;
+	// if (p_view.z < 0 || ((p_proj.x < -expand || p_proj.x > expand || p_proj.y < -expand || p_proj.y > expand)))
+	float x0 = patchbbox[1], y0 = patchbbox[0], x1 = patchbbox[3], y1 = patchbbox[2];
+	float w = x1 - x0, h = y1 - y0;
+	float expand = 0.2;
+	if (p_view.z < 0 || p_pix.x < x0 - w * expand || p_pix.x >= x1 + w * expand || p_pix.y < y0 - h * expand || p_pix.y >= y1 + h * expand)
+	{
+		if (prefiltered)  // 所有调用的地方prefiltered都是false，所以不用管
+		{
+			printf("Point is filtered although prefiltered is set. This shouldn't happen!");
+			__trap();
+		}
+		return false;
+	}
+	return true;
+}
+
+__forceinline__ __device__ bool front_facing(
+	float3& n_view,
+	float3& p_view,
+	float* viewCos,
+	bool prefiltered)
+{
+	float dot = p_view.x * n_view.x + p_view.y * n_view.y + p_view.z * n_view.z;
+	// float z = n_view.z;
+	bool cond = (dot > -0.01);
+
+	// float sin = dot / sqrtf(p_view.x * p_view.x + p_view.y * p_view.y + p_view.z * p_view.z);
+	// if (dot < 0 && n_view.z >= 0)
+
+	// cond = (dot >= 0 || z < 0 || p_view.y < 0 || p_view.z > 0);
+	// cond = dot < 0 && z >=0;
+	// cond = p_view.z < 0;
+	// cond = p_view.z < 0;
+	// cond = (dot >= 0 || sin > 0.95);
+	// cond = dot >= 0;
+
+	if (cond)
+	{
+		if (prefiltered)
+		{
+			printf("Point is filtered although prefiltered is set. This shouldn't happen!");
+			__trap();
+		}
+
+		// printf("back facing normal: %.8f, %.8f, %.8f\n", camNormal.x, camNormal.y, camNormal.z);
+		return false;
+	}
+
+	// printf("front facing normal: %.8f, %.8f, %.8f\n", camNormal.x, camNormal.y, camNormal.z);
+	*viewCos = dot;
 	return true;
 }
 

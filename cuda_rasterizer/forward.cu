@@ -182,10 +182,26 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	radii[idx] = 0;
 	tiles_touched[idx] = 0;
 
+#if 0
 	// Perform near culling, quit if outside.
 	float3 p_view;
 	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
 		return;
+#else
+	float patchbbox[4] = {0, 0, H, W}; // 临时解决方案
+	float prcppoint[2] = {0.5, 0.5};
+
+	// Transform point by projecting
+	float3 p_orig = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
+	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
+	float p_w = 1.0f / (p_hom.w + 0.0000001f);
+	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
+	float3 p_view = transformPoint4x3(p_orig, viewmatrix);
+
+	// Perform near culling, quit if outside.
+	float2 point_image = { ndc2Pix(p_proj.x, W, prcppoint[0]), ndc2Pix(p_proj.y, H, prcppoint[1]) };
+	if (!in_frustum(p_view, p_proj, point_image, patchbbox, prefiltered)) return;
+#endif
 	
 	// Compute transformation matrix
 	glm::mat3 T;
@@ -207,6 +223,11 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		normal = make_float3(0.0, 0.0, 1.0);
 	}
 
+	float viewCos;
+	if (!front_facing(normal, p_view, &viewCos, prefiltered)) {
+		return; // cull backfacing points
+	}
+
 #if DUAL_VISIABLE
 	float cos = -sumf3(p_view * normal);
 	if (cos == 0) return;
@@ -215,7 +236,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 #endif
 
 	// Compute center and radius
-	float2 point_image;
+	// float2 point_image;
 	float radius;
 	{
 		float2 extent;
@@ -415,6 +436,8 @@ renderCUDA(
 	// rendering data to the frame and auxiliary buffers.
 	if (inside)
 	{
+		T = fminf(1 - 0.000001, T);
+
 		final_T[pix_id] = T;
 		n_contrib[pix_id] = last_contributor;
 		for (int ch = 0; ch < CHANNELS; ch++)
