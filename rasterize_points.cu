@@ -229,6 +229,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  debug);
   }
 
-  return std::make_tuple(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dtransMat, dL_dsh, dL_dscales, dL_drotations);
+  torch::Tensor dL_dscales_fake3d = torch::zeros({P, 3}, means3D.options());
+  dL_dscales_fake3d.index_put_({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}, dL_dscales);
+
+  return std::make_tuple(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dtransMat, dL_dsh, dL_dscales_fake3d, dL_drotations);
 }
 

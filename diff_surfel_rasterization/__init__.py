@@ -57,12 +57,13 @@ class _RasterizeGaussians(torch.autograd.Function):
     ):
 
         # Restructure arguments the way that the C++ lib expects them
+        scales2d = scales[:, 0:2]
         args = (
             raster_settings.bg, 
             means3D,
             colors_precomp,
             opacities,
-            scales,
+            scales2d,
             rotations,
             raster_settings.scale_modifier,
             cov3Ds_precomp,
@@ -164,10 +165,13 @@ class GaussianRasterizationSettings(NamedTuple):
     scale_modifier : float
     viewmatrix : torch.Tensor
     projmatrix : torch.Tensor
+    patch_bbox: torch.Tensor
+    prcppoint: torch.Tensor
     sh_degree : int
     campos : torch.Tensor
     prefiltered : bool
     debug : bool
+    config: torch.Tensor
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):
