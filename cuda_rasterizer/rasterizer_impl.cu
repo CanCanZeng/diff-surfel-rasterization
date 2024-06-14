@@ -137,21 +137,6 @@ __global__ void identifyTileRanges(int L, uint64_t* point_list_keys, uint2* rang
 		ranges[currtile].y = L;
 }
 
-// Mark Gaussians as visible/invisible, based on view frustum testing
-void CudaRasterizer::Rasterizer::markVisible(
-	int P,
-	float* means3D,
-	float* viewmatrix,
-	float* projmatrix,
-	bool* present)
-{
-	checkFrustum << <(P + 255) / 256, 256 >> > (
-		P,
-		means3D,
-		viewmatrix, projmatrix,
-		present);
-}
-
 CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& chunk, size_t P)
 {
 	GeometryState geom;

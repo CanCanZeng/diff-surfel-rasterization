@@ -62,7 +62,3 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& imageBuffer,
 	const bool debug);
 		
-torch::Tensor markVisible(
-		torch::Tensor& means3D,
-		torch::Tensor& viewmatrix,
-		torch::Tensor& projmatrix);

@@ -232,23 +232,3 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   return std::make_tuple(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dtransMat, dL_dsh, dL_dscales, dL_drotations);
 }
 
-torch::Tensor markVisible(
-		torch::Tensor& means3D,
-		torch::Tensor& viewmatrix,
-		torch::Tensor& projmatrix)
-{ 
-  const int P = means3D.size(0);
-  
-  torch::Tensor present = torch::full({P}, false, means3D.options().dtype(at::kBool));
- 
-  if(P != 0)
-  {
-	CudaRasterizer::Rasterizer::markVisible(P,
-		means3D.contiguous().data<float>(),
-		viewmatrix.contiguous().data<float>(),
-		projmatrix.contiguous().data<float>(),
-		present.contiguous().data<bool>());
-  }
-  
-  return present;
-}

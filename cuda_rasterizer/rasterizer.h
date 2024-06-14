@@ -21,13 +21,6 @@ namespace CudaRasterizer
 	{
 	public:
 
-		static void markVisible(
-			int P,
-			float* means3D,
-			float* viewmatrix,
-			float* projmatrix,
-			bool* present);
-
 		static int forward(
 			std::function<char* (size_t)> geometryBuffer,
 			std::function<char* (size_t)> binningBuffer,
