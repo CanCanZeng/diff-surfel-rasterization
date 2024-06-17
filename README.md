@@ -1,3 +1,12 @@
+# Major changes
+* <span style="font-size: larger;">2024.06.17</span>
+1. accommodate to gaussian_surfel's input and output
+2. add backface culling as implemented in gaussian_surfel
+
+<br>
+<br>
+<br>
+
 # Differential Surfel Rasterization
 
 This is the rasterization engine for the paper "2D Gaussian Splatting for  Geometrically Accurate Radiance Fields". If you can make use of it in your own research, please be so kind to cite us.
