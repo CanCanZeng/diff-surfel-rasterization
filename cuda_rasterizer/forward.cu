@@ -15,25 +15,33 @@
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
 
+#include <iostream>
+
 // Forward method for converting the input spherical harmonics
 // coefficients of each Gaussian to a simple RGB color.
-__device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const glm::vec3* means, glm::vec3 campos, const float* shs, bool* clamped)
-{
+__device__ Eigen::Vector3f ComputeColorFromSH(
+	int idx,
+	int deg,
+	int max_coeffs,
+	const Eigen::Vector3f& means,
+	const Eigen::Vector3f& campos,
+	const float* shs,
+	bool* clamped
+	){
 	// The implementation is loosely based on code for 
 	// "Differentiable Point-Based Radiance Fields for 
 	// Efficient View Synthesis" by Zhang et al. (2022)
-	glm::vec3 pos = means[idx];
-	glm::vec3 dir = pos - campos;
-	dir = dir / glm::length(dir);
+	Eigen::Vector3f dir = means - campos;
+	dir.normalize();
 
-	glm::vec3* sh = ((glm::vec3*)shs) + idx * max_coeffs;
-	glm::vec3 result = SH_C0 * sh[0];
+	Eigen::Vector3f* sh = ((Eigen::Vector3f*)shs) + idx * max_coeffs;
+	Eigen::Vector3f result = SH_C0 * sh[0];
 
 	if (deg > 0)
 	{
-		float x = dir.x;
-		float y = dir.y;
-		float z = dir.z;
+		float x = dir[0];
+		float y = dir[1];
+		float z = dir[2];
 		result = result - SH_C1 * y * sh[1] + SH_C1 * z * sh[2] - SH_C1 * x * sh[3];
 
 		if (deg > 1)
@@ -60,98 +68,108 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 			}
 		}
 	}
-	result += 0.5f;
+	result += Eigen::Vector3f(0.5f, 0.5f, 0.5f);
 
 	// RGB colors are clamped to positive values. If values are
 	// clamped, we need to keep track of this for the backward pass.
-	clamped[3 * idx + 0] = (result.x < 0);
-	clamped[3 * idx + 1] = (result.y < 0);
-	clamped[3 * idx + 2] = (result.z < 0);
-	return glm::max(result, 0.0f);
+	clamped[3 * idx + 0] = (result[0] < 0);
+	clamped[3 * idx + 1] = (result[1] < 0);
+	clamped[3 * idx + 2] = (result[2] < 0);
+	return result.cwiseMax(0.f);
 }
+
+__forceinline__ __device__ void GetRect(
+	Eigen::Vector2i& rect_min,
+	Eigen::Vector2i& rect_max,
+	const Eigen::Vector2f& p,
+	const int& max_radius,
+	const dim3& grid
+	){
+	rect_min[0] = min(grid.x, max((int)0, (int)((p[0] - max_radius) / BLOCK_X)));
+	rect_min[1] = min(grid.y, max((int)0, (int)((p[1] - max_radius) / BLOCK_Y)));
+
+	rect_max[0] = min(grid.x, max((int)0, (int)((p[0] + max_radius + BLOCK_X - 1) / BLOCK_X)));
+	rect_max[1] = min(grid.y, max((int)0, (int)((p[1] + max_radius + BLOCK_Y - 1) / BLOCK_Y)));
+}
+
 
 // Compute a 2D-to-2D mapping matrix from a tangent plane into a image plane
 // given a 2D gaussian parameters.
-__device__ void compute_transmat(
-	const float3& p_orig,
-	const glm::vec2 scale,
-	float mod,
-	const glm::vec4 rot,
-	const float* projmatrix,
-	const float* viewmatrix,
-	const int W,
-	const int H, 
-	glm::mat3 &T,
-	float3 &normal
+__device__ void ComputeTransmat(
+	const Eigen::Vector3f& p_proj,
+	const Eigen::Vector2f& scale,
+	const float& mod,
+	const Eigen::Vector4f& rot,
+	const Eigen::Matrix3f& projmatrix,
+	const Eigen::Matrix3f& viewmatrix_R,
+	Eigen::Matrix3f& T,
+	Eigen::Vector3f& normal
 ) {
+	Eigen::Matrix3f R = Eigen::Quaternionf(rot[0], rot[1], rot[2], rot[3]).matrix();
+	Eigen::Matrix3f S = Eigen::Matrix3f::Identity();
+	S(0, 0) = scale[0] * mod; S(1, 1) = scale[1] * mod;
+	Eigen::Matrix3f L = R * S;
 
-	glm::mat3 R = quat_to_rotmat(rot);
-	glm::mat3 S = scale_to_mat(scale, mod);
-	glm::mat3 L = R * S;
+	Eigen::Matrix3f K_Rv_RS = projmatrix * viewmatrix_R * L;
+	K_Rv_RS.block<3, 1>(0, 2) = p_proj;  // 前两列保持不变
 
-	// center of Gaussians in the camera coordinate
-	glm::mat3x4 splat2world = glm::mat3x4(
-		glm::vec4(L[0], 0.0),
-		glm::vec4(L[1], 0.0),
-		glm::vec4(p_orig.x, p_orig.y, p_orig.z, 1)
-	);
+	T = K_Rv_RS.transpose();  // 公式中用的是 T = (KWH)',即有个转置
 
-	glm::mat4 world2ndc = glm::mat4(
-		projmatrix[0], projmatrix[4], projmatrix[8], projmatrix[12],
-		projmatrix[1], projmatrix[5], projmatrix[9], projmatrix[13],
-		projmatrix[2], projmatrix[6], projmatrix[10], projmatrix[14],
-		projmatrix[3], projmatrix[7], projmatrix[11], projmatrix[15]
-	);
-
-	glm::mat3x4 ndc2pix = glm::mat3x4(
-		glm::vec4(float(W) / 2.0, 0.0, 0.0, float(W-1) / 2.0),
-		glm::vec4(0.0, float(H) / 2.0, 0.0, float(H-1) / 2.0),
-		glm::vec4(0.0, 0.0, 0.0, 1.0)
-	);
-
-	T = glm::transpose(splat2world) * world2ndc * ndc2pix;
-	normal = transformVec4x3({L[2].x, L[2].y, L[2].z}, viewmatrix);
-
+	normal = viewmatrix_R * R.col(2);
 }
 
 // Computing the bounding box of the 2D Gaussian and its center
 // The center of the bounding box is used to create a low pass filter
-__device__ bool compute_aabb(
-	glm::mat3 T, 
-	float2& point_image,
-	float2 & extent
+__device__ bool ComputeAabb(
+	const float& sigma2,    // 1^2 or 3^2
+	const Eigen::Matrix3f& T,
+	Eigen::Vector2f& point_image,
+	float& radius
 ) {
-	float3 T0 = {T[0][0], T[0][1], T[0][2]};
-	float3 T1 = {T[1][0], T[1][1], T[1][2]};
-	float3 T3 = {T[2][0], T[2][1], T[2][2]};
-
-	// Compute AABB
-	float3 temp_point = {1.0f, 1.0f, -1.0f};
-	float distance = sumf3(T3 * T3 * temp_point);
-	float3 f = (1 / distance) * temp_point;
-	if (distance == 0.0) return false;
-
-	point_image = {
-		sumf3(f * T0 * T3),
-		sumf3(f * T1 * T3)
-	};  
+	Eigen::Vector3f T0 = T.col(0);
+	Eigen::Vector3f T1 = T.col(1);
+	Eigen::Vector3f T2 = T.col(2);
 	
-	float2 temp = {
-		sumf3(f * T0 * T0),
-		sumf3(f * T1 * T1)
-	};
-	float2 half_extend = point_image * point_image - temp;
-	extent = sqrtf2(maxf2(1e-4, half_extend));
+	// for x
+	Eigen::Vector3f temp_point(sigma2, sigma2, -1.f);
+	float a = (T2.cwiseProduct(T2)).dot(temp_point);
+	if (abs(a) < 1e-6) {
+		return false;
+	}
+
+	float a_inv = 1.f / a;
+
+	float b = -2 * (T0.cwiseProduct(T2)).dot(temp_point);
+	float c = (T0.cwiseProduct(T0)).dot(temp_point);
+	point_image[0] = -b * 0.5 * a_inv;
+	float extent_x_square = (b*b - 4*a*c) * a_inv * a_inv * 0.25;
+	extent_x_square = extent_x_square > 0 ? extent_x_square : 0;
+
+	// for y
+	b = -2 * (T1.cwiseProduct(T2)).dot(temp_point);
+	c = (T1.cwiseProduct(T1)).dot(temp_point);
+	point_image[1] = -b * 0.5 * a_inv;
+	float extent_y_square = (b*b - 4*a*c) * a_inv * a_inv * 0.25;
+	extent_y_square = extent_y_square > 0 ? extent_y_square : 0;
+
+	radius = sqrt(extent_x_square + extent_y_square);
+
+	// printf("T[0]=%f %f %f\n", T0[0], T0[1], T0[2]);
+	// printf("T[1]=%f %f %f\n", T1[0], T1[1], T1[2]);
+	// printf("T[2]=%f %f %f\n", T2[0], T2[1], T2[2]);
+	// printf("point_image=%f %f\n", point_image[0], point_image[1]);
+	// printf("extent_square=%f %f\n", extent_x_square, extent_y_square);
+
 	return true;
 }
 
 // Perform initial steps for each Gaussian prior to rasterization.
 template<int C>
 __global__ void preprocessCUDA(int P, int D, int M,
-	const float* orig_points,
-	const glm::vec2* scales,
+	const Eigen::Vector3f* orig_points,
+	const Eigen::Vector2f* scales,
 	const float scale_modifier,
-	const glm::vec4* rotations,
+	const Eigen::Vector4f* rotations,
 	const float* opacities,
 	const float* shs,
 	bool* clamped,
@@ -159,16 +177,16 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const float* colors_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
-	const glm::vec3* cam_pos,
+	const Eigen::Vector3f* cam_pos,
 	const int W, int H,
 	const float tan_fovx, const float tan_fovy,
 	const float focal_x, const float focal_y,
 	int* radii,
-	float2* points_xy_image,
+	Eigen::Vector2f* points_xy_image,
 	float* depths,
 	float* transMats,
 	float* rgb,
-	float4* normal_opacity,
+	Eigen::Vector4f* normal_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
 	bool prefiltered)
@@ -182,87 +200,92 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	radii[idx] = 0;
 	tiles_touched[idx] = 0;
 
-#if 0
-	// Perform near culling, quit if outside.
-	float3 p_view;
-	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
+	const Eigen::Matrix4f view_matrix = *(reinterpret_cast<const Eigen::Matrix<float, 4, 4, Eigen::RowMajor>*>(viewmatrix));
+	// printf("viewmatrix_t=%f %f %f\n", view_matrix(0, 3), view_matrix(1, 3), view_matrix(2, 3));
+
+	Eigen::Matrix3f viewmatrix_R = view_matrix.block<3, 3>(0, 0);
+	Eigen::Vector3f viewmatrix_t = view_matrix.block<3, 1>(0, 3);
+
+	const Eigen::Matrix3f proj_matrix = *(reinterpret_cast<const Eigen::Matrix<float, 3, 3, Eigen::RowMajor>*>(projmatrix));
+	// printf("proj_matrix=\n%f %f %f\n%f %f %f\n%f %f %f\n\n\n", proj_matrix(0, 0), proj_matrix(0, 1), proj_matrix(0, 2), proj_matrix(1, 0), proj_matrix(1, 1), proj_matrix(1, 2), proj_matrix(2, 0), proj_matrix(2, 1), proj_matrix(2, 2));
+
+	Eigen::Matrix<float, 3, 4> a;
+	Eigen::Vector3f p_orig = orig_points[idx];
+	Eigen::Vector3f p_view = viewmatrix_R * p_orig + viewmatrix_t;
+	Eigen::Vector3f p_proj = proj_matrix * p_view;
+
+	// printf("p_orig=%f %f %f\n", p_orig[0], p_orig[1], p_orig[2]);
+	// printf("viewmatrix_t=%f %f %f\n", viewmatrix_t[0], viewmatrix_t[1], viewmatrix_t[2]);
+	// printf("p_view=%f %f %f\n", p_view[0], p_view[1], p_view[2]);
+	// printf("p_proj=%f %f %f\n", p_proj[0]/p_proj[2], p_proj[1]/p_proj[2], p_proj[2]);
+
+	if (!IsInFrustum(p_proj, W, H)) {
 		return;
-#else
-	float patchbbox[4] = {0, 0, H, W}; // 临时解决方案
-	float prcppoint[2] = {0.5, 0.5};
+	}
 
-	// Transform point by projecting
-	float3 p_orig = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
-	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
-	float p_w = 1.0f / (p_hom.w + 0.0000001f);
-	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
-	float3 p_view = transformPoint4x3(p_orig, viewmatrix);
-
-	// Perform near culling, quit if outside.
-	float2 point_image = { ndc2Pix(p_proj.x, W, prcppoint[0]), ndc2Pix(p_proj.y, H, prcppoint[1]) };
-	if (!in_frustum(p_view, p_proj, point_image, patchbbox, prefiltered)) return;
-#endif
-	
 	// Compute transformation matrix
-	glm::mat3 T;
-	float3 normal;
-	if (transMat_precomp == nullptr)
-	{
-		compute_transmat(((float3*)orig_points)[idx], scales[idx], scale_modifier, rotations[idx], projmatrix, viewmatrix, W, H, T, normal);
-		float3 *T_ptr = (float3*)transMats;
-		T_ptr[idx * 3 + 0] = {T[0][0], T[0][1], T[0][2]};
-		T_ptr[idx * 3 + 1] = {T[1][0], T[1][1], T[1][2]};
-		T_ptr[idx * 3 + 2] = {T[2][0], T[2][1], T[2][2]};
-	} else {
-		glm::vec3 *T_ptr = (glm::vec3*)transMat_precomp;
-		T = glm::mat3(
-			T_ptr[idx * 3 + 0], 
-			T_ptr[idx * 3 + 1],
-			T_ptr[idx * 3 + 2]
-		);
-		normal = make_float3(0.0, 0.0, 1.0);
+	Eigen::Matrix3f T;
+	Eigen::Vector3f normal;
+	ComputeTransmat(p_proj, scales[idx], scale_modifier, rotations[idx], proj_matrix, viewmatrix_R, T, normal);
+	// printf("T=\n%f %f %f\n%f %f %f\n%f %f %f\n\n\n", T(0, 0), T(0, 1), T(0, 2), T(1, 0), T(1, 1), T(1, 2), T(2, 0), T(2, 1), T(2, 2));
+	// printf("normal=%f %f %f\n", normal[0], normal[1], normal[2]);
+	for (int row = 0; row<3; row++) {
+		for (int col=0; col<3; col++) {
+			int j = col * 3 + row;
+			transMats[idx * 9 + j] = T(row, col);
+		}
 	}
 
-	float viewCos;
-	if (!front_facing(normal, p_view, &viewCos, prefiltered)) {
-		return; // cull backfacing points
-	}
+	// printf("T=\n%f %f %f\n%f %f %f\n%f %f %f\n",
+	// 	transMats[idx*9+0], transMats[idx*9+1], transMats[idx*9+2],
+	// 	transMats[idx*9+3], transMats[idx*9+4], transMats[idx*9+5],
+	// 	transMats[idx*9+6], transMats[idx*9+7], transMats[idx*9+8]);
 
-#if DUAL_VISIABLE
-	float cos = -sumf3(p_view * normal);
-	if (cos == 0) return;
-	float multiplier = cos > 0 ? 1: -1;
-	normal = multiplier * normal;
-#endif
+
+
+	// cull backfacing points
+	if (normal.dot(p_view) > -0.01) {
+		return;
+	}
 
 	// Compute center and radius
-	// float2 point_image;
+	constexpr float sigma2 = 3.f * 3.f; // 原作者采用的是求sigma=1时的半径，然后乘以3。而2dgs-non-official作者采用了直接求sigma=3时的半径，感觉结果更精确，因此采纳后者
+	Eigen::Vector2f point_image;
 	float radius;
-	{
-		float2 extent;
-		bool ok = compute_aabb(T, point_image, extent);
-		if (!ok) return;
-		radius = ceil(3.0f * max(extent.x, extent.y));
+	if (!ComputeAabb(sigma2, T, point_image, radius)) {
+		return;
 	}
 
+	// printf("point_image=%f %f\n\n\n", point_image[0], point_image[1]);
+	
+	// Eigen::Vector2i rect_min, rect_max;
+	// GetRect(rect_min, rect_max, point_image, radius, grid);
+	// if ((rect_max[0] - rect_min[0]) * (rect_max[1] - rect_min[1]) == 0)
+	// 	return;
+
 	uint2 rect_min, rect_max;
-	getRect(point_image, radius, rect_min, rect_max, grid);
+	getRect(make_float2(point_image[0], point_image[1]), radius, rect_min, rect_max, grid);
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
 		return;
 
-	// Compute colors 
-	if (colors_precomp == nullptr) {
-		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
-		rgb[idx * C + 0] = result.x;
-		rgb[idx * C + 1] = result.y;
-		rgb[idx * C + 2] = result.z;
-	}
+	// Compute colors
+	Eigen::Vector3f result = ComputeColorFromSH(idx, D, M, p_orig, *cam_pos, shs, clamped);
+	rgb[idx * C + 0] = result[0];
+	rgb[idx * C + 1] = result[1];
+	rgb[idx * C + 2] = result[2];
 
-	depths[idx] = p_view.z;
+	depths[idx] = p_view[2];
 	radii[idx] = (int)radius;
 	points_xy_image[idx] = point_image;
-	normal_opacity[idx] = {normal.x, normal.y, normal.z, opacities[idx]};
+	normal_opacity[idx] = Eigen::Vector4f(normal[0], normal[1], normal[2], opacities[idx]);
+	// tiles_touched[idx] = (rect_max[1] - rect_min[1]) * (rect_max[0] - rect_min[0]);
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
+
+	// printf("depths=%f\n", depths[idx]);
+	// printf("radius=%d\n", (int)radius);
+	// printf("point_image=%f %f\n", point_image[0], point_image[1]);
+	// printf("normal_opacity=%f %f %f %f\n", normal[0], normal[1], normal[2], opacities[idx]);
+	// printf("tiles_touched=%d\n", tiles_touched[idx]);
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -492,10 +515,10 @@ void FORWARD::render(
 }
 
 void FORWARD::preprocess(int P, int D, int M,
-	const float* means3D,
-	const glm::vec2* scales,
+	const Eigen::Vector3f* means3D,
+	const Eigen::Vector2f* scales,
 	const float scale_modifier,
-	const glm::vec4* rotations,
+	const Eigen::Vector4f* rotations,
 	const float* opacities,
 	const float* shs,
 	bool* clamped,
@@ -503,20 +526,21 @@ void FORWARD::preprocess(int P, int D, int M,
 	const float* colors_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
-	const glm::vec3* cam_pos,
+	const Eigen::Vector3f* cam_pos,
 	const int W, const int H,
 	const float focal_x, const float focal_y,
 	const float tan_fovx, const float tan_fovy,
 	int* radii,
-	float2* means2D,
+	Eigen::Vector2f* means2D,
 	float* depths,
 	float* transMats,
 	float* rgb,
-	float4* normal_opacity,
+	Eigen::Vector4f* normal_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
 	bool prefiltered)
 {
+	std::cerr << "到了forward.cu里面" << std::endl;
 	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
 		P, D, M,
 		means3D,
@@ -544,4 +568,5 @@ void FORWARD::preprocess(int P, int D, int M,
 		tiles_touched,
 		prefiltered
 		);
+	std::cerr << "preprocess处理完了" << std::endl;
 }

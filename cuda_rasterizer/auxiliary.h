@@ -241,6 +241,30 @@ __forceinline__ __device__ bool in_frustum(
 	return true;
 }
 
+
+__forceinline__ __device__ bool IsInFrustum(
+	Eigen::Vector3f& p_proj,  
+	const int& W,
+	const int& H
+	){
+
+	float d = p_proj[2];
+	if (d < 0.01) {
+		return false;
+	}
+
+	float d_inv = 1.f / d;
+	float u = p_proj[0] * d_inv;
+	float v = p_proj[1] * d_inv;
+
+	const float expand = 0.2;
+	if (u < -W * expand || u > W * (1 + expand) || v < -H * expand || v > H * (1 + expand)) {
+		return false;
+	}
+	return true;
+}
+
+
 __forceinline__ __device__ bool front_facing(
 	float3& n_view,
 	float3& p_view,

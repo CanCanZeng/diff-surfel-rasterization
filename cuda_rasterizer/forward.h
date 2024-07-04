@@ -17,15 +17,17 @@
 #include "device_launch_parameters.h"
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 
 namespace FORWARD
 {
 	// Perform initial steps for each Gaussian prior to rasterization.
 	void preprocess(int P, int D, int M,
-		const float* orig_points,
-		const glm::vec2* scales,
+		const Eigen::Vector3f* orig_points,
+		const Eigen::Vector2f* scales,
 		const float scale_modifier,
-		const glm::vec4* rotations,
+		const Eigen::Vector4f* rotations,
 		const float* opacities,
 		const float* shs,
 		bool* clamped,
@@ -33,18 +35,18 @@ namespace FORWARD
 		const float* colors_precomp,
 		const float* viewmatrix,
 		const float* projmatrix,
-		const glm::vec3* cam_pos,
+		const Eigen::Vector3f* cam_pos,
 		const int W, int H,
 		const float focal_x, float focal_y,
 		const float tan_fovx, float tan_fovy,
 		int* radii,
-		float2* points_xy_image,
+		Eigen::Vector2f* points_xy_image,
 		float* depths,
 		// float* isovals,
 		// float3* normals,
 		float* transMats,
 		float* colors,
-		float4* normal_opacity,
+		Eigen::Vector4f* normal_opacity,
 		const dim3 grid,
 		uint32_t* tiles_touched,
 		bool prefiltered);

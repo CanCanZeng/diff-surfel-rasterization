@@ -21,6 +21,7 @@
 #include <cub/device/device_radix_sort.cuh>
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
+#include <Eigen/Core>
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -100,6 +101,9 @@ __global__ void duplicateWithKeys(
 			for (int x = rect_min.x; x < rect_max.x; x++)
 			{
 				uint64_t key = y * grid.x + x;
+				if (key > grid.x * grid.y * grid.z) {
+					printf("Error: key=%u idx=%d, rect_min.x=%d, rect_min.y=%d, rect_max.x=%d, rect_max.y=%d, radius=%f", key, idx, rect_min.x, rect_min.y, rect_max.x, rect_max.y, radii[idx]);
+				}
 				key <<= 32;
 				key |= *((uint32_t*)&depths[idx]);
 				gaussian_keys_unsorted[off] = key;
@@ -113,7 +117,7 @@ __global__ void duplicateWithKeys(
 // Check keys to see if it is at the start/end of one tile's range in 
 // the full sorted list. If yes, write start/end of this tile. 
 // Run once per instanced (duplicated) Gaussian ID.
-__global__ void identifyTileRanges(int L, uint64_t* point_list_keys, uint2* ranges)
+__global__ void identifyTileRanges(int L, const uint64_t* point_list_keys, uint2* ranges)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= L)
@@ -122,11 +126,19 @@ __global__ void identifyTileRanges(int L, uint64_t* point_list_keys, uint2* rang
 	// Read tile ID from key. Update start/end of tile range if at limit.
 	uint64_t key = point_list_keys[idx];
 	uint32_t currtile = key >> 32;
+	if (currtile >= 2700) {
+		// printf("Error: currtile=%u > %u!  idx=%d\n", currtile, 2700, idx);
+		return;
+	}
 	if (idx == 0)
 		ranges[currtile].x = 0;
 	else
 	{
 		uint32_t prevtile = point_list_keys[idx - 1] >> 32;
+		if (prevtile >= 2700) {
+			// printf("Error: prevtile=%u > %u!\n", prevtile, 2700);
+			return;
+		}
 		if (currtile != prevtile)
 		{
 			ranges[prevtile].y = idx;
@@ -135,6 +147,25 @@ __global__ void identifyTileRanges(int L, uint64_t* point_list_keys, uint2* rang
 	}
 	if (idx == L - 1)
 		ranges[currtile].y = L;
+}
+
+
+__global__ void checkPointListKeys(int L, const uint64_t* point_list_keys, dim3 grid)
+{
+	int max_tile_idx = grid.x * grid.y * grid.z;
+
+	auto idx = cg::this_grid().thread_rank();
+	if (idx >= 1)
+		return;
+
+	// Read tile ID from key. Update start/end of tile range if at limit.
+	for (int i = 0; i < L; i++) {
+		uint64_t key = point_list_keys[i];
+		uint32_t currtile = key >> 32;
+		if (currtile >= max_tile_idx) {
+			printf("Error: currtile=%u > %u!  idx=%d\n", currtile, max_tile_idx, i);
+		}
+	}
 }
 
 CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& chunk, size_t P)
@@ -220,6 +251,8 @@ int CudaRasterizer::Rasterizer::forward(
 	dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	dim3 block(BLOCK_X, BLOCK_Y, 1);
 
+	printf("tile_grid=%d %d %d\n", tile_grid.x, tile_grid.y, tile_grid.z);
+
 	// Dynamically resize image-based auxiliary buffers during training
 	size_t img_chunk_size = required<ImageState>(width * height);
 	char* img_chunkptr = imageBuffer(img_chunk_size);
@@ -233,26 +266,29 @@ int CudaRasterizer::Rasterizer::forward(
 	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
 	CHECK_CUDA(FORWARD::preprocess(
 		P, D, M,
-		means3D,
-		(glm::vec2*)scales,
+		(const Eigen::Vector3f*)means3D,
+		// (glm::vec2*)scales,
+		(const Eigen::Vector2f*)scales,
 		scale_modifier,
-		(glm::vec4*)rotations,
+		// (glm::vec4*)rotations,
+		(const Eigen::Vector4f*)rotations,
 		opacities,
 		shs,
 		geomState.clamped,
 		transMat_precomp,
 		colors_precomp,
-		viewmatrix, projmatrix,
-		(glm::vec3*)cam_pos,
+		viewmatrix,
+		projmatrix,
+		(const Eigen::Vector3f*)cam_pos,
 		width, height,
 		focal_x, focal_y,
 		tan_fovx, tan_fovy,
 		radii,
-		geomState.means2D,
+		(Eigen::Vector2f*)geomState.means2D,
 		geomState.depths,
 		geomState.transMat,
 		geomState.rgb,
-		geomState.normal_opacity,
+		(Eigen::Vector4f*)geomState.normal_opacity,
 		tile_grid,
 		geomState.tiles_touched,
 		prefiltered
@@ -283,45 +319,51 @@ int CudaRasterizer::Rasterizer::forward(
 		tile_grid)
 	CHECK_CUDA(, debug)
 
-	int bit = getHigherMsb(tile_grid.x * tile_grid.y);
+	checkPointListKeys<< <(num_rendered + 255) / 256, 256 >> >(num_rendered, binningState.point_list_keys_unsorted, tile_grid);
+
+	// int bit = getHigherMsb(tile_grid.x * tile_grid.y);
 
 	// Sort complete list of (duplicated) Gaussian indices by keys
-	CHECK_CUDA(cub::DeviceRadixSort::SortPairs(
-		binningState.list_sorting_space,
-		binningState.sorting_size,
-		binningState.point_list_keys_unsorted, binningState.point_list_keys,
-		binningState.point_list_unsorted, binningState.point_list,
-		num_rendered, 0, 32 + bit), debug)
+	// CHECK_CUDA(cub::DeviceRadixSort::SortPairs(
+	// 	binningState.list_sorting_space,
+	// 	binningState.sorting_size,
+	// 	binningState.point_list_keys_unsorted, binningState.point_list_keys,
+	// 	binningState.point_list_unsorted, binningState.point_list,
+	// 	num_rendered, 0, 32 + bit), debug)
 
-	CHECK_CUDA(cudaMemset(imgState.ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2)), debug);
+	// CHECK_CUDA(cudaMemset(imgState.ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2)), debug);
+
+	// printf("num_rendered=%d\n", num_rendered);
 
 	// Identify start and end of per-tile workloads in sorted list
-	if (num_rendered > 0)
-		identifyTileRanges << <(num_rendered + 255) / 256, 256 >> > (
-			num_rendered,
-			binningState.point_list_keys,
-			imgState.ranges);
-	CHECK_CUDA(, debug)
+	// checkPointListKeys<< <(num_rendered + 255) / 256, 256 >> >(num_rendered, binningState.point_list_keys_unsorted, tile_grid);
+	// CHECK_CUDA(, debug)
+	// if (num_rendered > 0)
+	// 	identifyTileRanges << <(num_rendered + 255) / 256, 256 >> > (
+	// 		num_rendered,
+	// 		binningState.point_list_keys,
+	// 		imgState.ranges);
+	// CHECK_CUDA(, debug)
 
-	// Let each tile blend its range of Gaussians independently in parallel
-	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
-	const float* transMat_ptr = transMat_precomp != nullptr ? transMat_precomp : geomState.transMat;
-	CHECK_CUDA(FORWARD::render(
-		tile_grid, block,
-		imgState.ranges,
-		binningState.point_list,
-		width, height,
-		focal_x, focal_y,
-		geomState.means2D,
-		feature_ptr,
-		transMat_ptr,
-		geomState.depths,
-		geomState.normal_opacity,
-		imgState.accum_alpha,
-		imgState.n_contrib,
-		background,
-		out_color,
-		out_others), debug)
+	// // Let each tile blend its range of Gaussians independently in parallel
+	// const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+	// const float* transMat_ptr = transMat_precomp != nullptr ? transMat_precomp : geomState.transMat;
+	// CHECK_CUDA(FORWARD::render(
+	// 	tile_grid, block,
+	// 	imgState.ranges,
+	// 	binningState.point_list,
+	// 	width, height,
+	// 	focal_x, focal_y,
+	// 	geomState.means2D,
+	// 	feature_ptr,
+	// 	transMat_ptr,
+	// 	geomState.depths,
+	// 	geomState.normal_opacity,
+	// 	imgState.accum_alpha,
+	// 	imgState.n_contrib,
+	// 	background,
+	// 	out_color,
+	// 	out_others), debug)
 
 	return num_rendered;
 }
