@@ -208,6 +208,69 @@ __forceinline__ __device__ bool in_frustum(int idx,
 	return true;
 }
 
+__forceinline__ __device__ bool in_frustum(
+	const float3& p_view,
+	const float2& p_pix, 
+	const float* patchbbox,
+	bool prefiltered)
+{
+
+	// if ((p_proj.x < -1.3 || p_proj.x > 1.3 || p_proj.y < -1.3 || p_proj.y > 1.3))
+	// 	printf("p_proj out of frustum! %.8f, %.8f, %.8f\n", p_proj.x, p_proj.y, p_proj.z);
+	// float expand = 1.1;
+	// if (p_view.z < 0 || ((p_proj.x < -expand || p_proj.x > expand || p_proj.y < -expand || p_proj.y > expand)))
+	float x0 = patchbbox[1], y0 = patchbbox[0], x1 = patchbbox[3], y1 = patchbbox[2];
+	float w = x1 - x0, h = y1 - y0;
+	float expand = 0.2;
+	if (p_view.z < 0 || p_pix.x < x0 - w * expand || p_pix.x >= x1 + w * expand || p_pix.y < y0 - h * expand || p_pix.y >= y1 + h * expand)
+	{
+		if (prefiltered)
+		{
+			printf("Point is filtered although prefiltered is set. This shouldn't happen!");
+			__trap();
+		}
+		return false;
+	}
+	return true;
+}
+
+__forceinline__ __device__ bool front_facing(
+	const float3& n_view,
+	const float3& p_view,
+	float* viewCos,
+	bool prefiltered)
+{
+	float dot = p_view.x * n_view.x + p_view.y * n_view.y + p_view.z * n_view.z;
+	// float z = n_view.z;
+	bool cond = (dot > -0.01);
+
+	// float sin = dot / sqrtf(p_view.x * p_view.x + p_view.y * p_view.y + p_view.z * p_view.z);
+	// if (dot < 0 && n_view.z >= 0)
+
+	// cond = (dot >= 0 || z < 0 || p_view.y < 0 || p_view.z > 0);
+	// cond = dot < 0 && z >=0;
+	// cond = p_view.z < 0;
+	// cond = p_view.z < 0;
+	// cond = (dot >= 0 || sin > 0.95);
+	// cond = dot >= 0;
+
+	if (cond)
+	{
+		if (prefiltered)
+		{
+			printf("Point is filtered although prefiltered is set. This shouldn't happen!");
+			__trap();
+		}
+
+		// printf("back facing normal: %.8f, %.8f, %.8f\n", camNormal.x, camNormal.y, camNormal.z);
+		return false;
+	}
+
+	// printf("front facing normal: %.8f, %.8f, %.8f\n", camNormal.x, camNormal.y, camNormal.z);
+	*viewCos = dot;
+	return true;
+}
+
 // adopt from gsplat: https://github.com/nerfstudio-project/gsplat/blob/main/gsplat/cuda/csrc/forward.cu
 inline __device__ glm::mat3 quat_to_rotmat(const glm::vec4 quat) {
 	// quat to rotation matrix
