@@ -487,20 +487,20 @@ __device__ void compute_transmat_aabb(
 			glm::vec4(p_orig.x, p_orig.y, p_orig.z, 1)
 		);
 
-		glm::mat4 world2ndc = glm::mat4(
-			projmatrix[0], projmatrix[4], projmatrix[8], projmatrix[12],
-			projmatrix[1], projmatrix[5], projmatrix[9], projmatrix[13],
-			projmatrix[2], projmatrix[6], projmatrix[10], projmatrix[14],
-			projmatrix[3], projmatrix[7], projmatrix[11], projmatrix[15]
+		glm::mat4 V = glm::mat4(
+			viewmatrix[0], viewmatrix[4], viewmatrix[8], viewmatrix[12],
+			viewmatrix[1], viewmatrix[5], viewmatrix[9], viewmatrix[13],
+			viewmatrix[2], viewmatrix[6], viewmatrix[10], viewmatrix[14],
+			viewmatrix[3], viewmatrix[7], viewmatrix[11], viewmatrix[15]
 		);
 
-		glm::mat3x4 ndc2pix = glm::mat3x4(
-			glm::vec4(float(W) / 2.0, 0.0, 0.0, float(W-1) / 2.0),
-			glm::vec4(0.0, float(H) / 2.0, 0.0, float(H-1) / 2.0),
-			glm::vec4(0.0, 0.0, 0.0, 1.0)
+		glm::mat3x4 K = glm::mat3x4(
+			projmatrix[0],           0.0, projmatrix[2], 0.0,
+					  0.0, projmatrix[1], projmatrix[3], 0.0,
+					  0.0,           0.0,           1.0, 0.0
 		);
 
-		P = world2ndc * ndc2pix;
+		P = V * K;
 		T = glm::transpose(M) * P;
 		normal = transformVec4x3({L[2].x, L[2].y, L[2].z}, viewmatrix);
 	}

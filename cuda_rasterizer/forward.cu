@@ -90,26 +90,27 @@ __device__ void compute_transmat(
 	glm::mat3 L = R * S;
 
 	// center of Gaussians in the camera coordinate
-	glm::mat3x4 splat2world = glm::mat3x4(
+	glm::mat3x4 M = glm::mat3x4(
 		glm::vec4(L[0], 0.0),
 		glm::vec4(L[1], 0.0),
 		glm::vec4(p_orig.x, p_orig.y, p_orig.z, 1)
 	);
 
-	glm::mat4 world2ndc = glm::mat4(
-		projmatrix[0], projmatrix[4], projmatrix[8], projmatrix[12],
-		projmatrix[1], projmatrix[5], projmatrix[9], projmatrix[13],
-		projmatrix[2], projmatrix[6], projmatrix[10], projmatrix[14],
-		projmatrix[3], projmatrix[7], projmatrix[11], projmatrix[15]
+	glm::mat4 V = glm::mat4(
+		viewmatrix[0], viewmatrix[4], viewmatrix[8], viewmatrix[12],
+		viewmatrix[1], viewmatrix[5], viewmatrix[9], viewmatrix[13],
+		viewmatrix[2], viewmatrix[6], viewmatrix[10], viewmatrix[14],
+		viewmatrix[3], viewmatrix[7], viewmatrix[11], viewmatrix[15]
 	);
 
-	glm::mat3x4 ndc2pix = glm::mat3x4(
-		glm::vec4(float(W) / 2.0, 0.0, 0.0, float(W-1) / 2.0),
-		glm::vec4(0.0, float(H) / 2.0, 0.0, float(H-1) / 2.0),
-		glm::vec4(0.0, 0.0, 0.0, 1.0)
+	glm::mat3x4 K = glm::mat3x4(
+		projmatrix[0],           0.0, projmatrix[2], 0.0,
+				  0.0, projmatrix[1], projmatrix[3], 0.0,
+				  0.0,           0.0,           1.0, 0.0
 	);
 
-	T = glm::transpose(splat2world) * world2ndc * ndc2pix;
+	glm::mat3x4 P = V * K;
+	T = glm::transpose(M) * P;
 	normal = transformVec4x3({L[2].x, L[2].y, L[2].z}, viewmatrix);
 
 }
@@ -198,8 +199,11 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
 	float3 p_view = transformPoint4x3(p_orig, viewmatrix);
 
+	float fx = projmatrix[0], fy = projmatrix[1], cx = projmatrix[2], cy = projmatrix[3];
+	float3 p_proj = make_float3(fx*p_view.x + cx*p_view.z, fy*p_view.y + cy*p_view.z, p_view.z);
+
 	// Perform near culling, quit if outside.
-	float2 p_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
+	float2 p_image = {p_proj.x/p_proj.z, p_proj.y/p_proj.z};
 	if (!in_frustum(p_view, p_image, patchbbox, prefiltered)) return;
 #endif
 	
