@@ -94,6 +94,11 @@ RasterizeGaussiansCUDA(
   std::function<char*(size_t)> geomFunc = resizeFunctional(geomBuffer);
   std::function<char*(size_t)> binningFunc = resizeFunctional(binningBuffer);
   std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
+
+  torch::Tensor scales_2d = scales;
+  if (scales.size(1) == 3) {
+	scales_2d = scales.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)});
+  }
   
   int rendered = 0;
   if(P != 0)
@@ -115,7 +120,7 @@ RasterizeGaussiansCUDA(
 		sh.contiguous().data_ptr<float>(),
 		colors.contiguous().data<float>(), 
 		opacity.contiguous().data<float>(), 
-		scales.contiguous().data_ptr<float>(),
+		scales_2d.contiguous().data_ptr<float>(),
 		scale_modifier,
 		rotations.contiguous().data_ptr<float>(),
 		transMat_precomp.contiguous().data<float>(), 
@@ -227,6 +232,12 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  dL_dscales.contiguous().data<float>(),
 	  dL_drotations.contiguous().data<float>(),
 	  debug);
+  }
+
+  if (scales.size(1) == 3) {
+	torch::Tensor dL_dscales_fake3d = torch::zeros({P, 3}, scales.options());
+  	dL_dscales_fake3d.index_put_({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}, dL_dscales);
+	return std::make_tuple(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dtransMat, dL_dsh, dL_dscales_fake3d, dL_drotations);
   }
 
   return std::make_tuple(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dtransMat, dL_dsh, dL_dscales, dL_drotations);
