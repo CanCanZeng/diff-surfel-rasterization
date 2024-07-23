@@ -104,8 +104,8 @@ __device__ void compute_transmat(
 	);
 
 	glm::mat3x4 K = glm::mat3x4(
-		projmatrix[0], projmatrix[1], projmatrix[2], 0,
-		projmatrix[3], projmatrix[4], projmatrix[5], 0,
+		projmatrix[0], projmatrix[1], projmatrix[2] - 0.5, 0,
+		projmatrix[3], projmatrix[4], projmatrix[5] - 0.5, 0,
 		projmatrix[6], projmatrix[7], projmatrix[8], 0
 	);
 
