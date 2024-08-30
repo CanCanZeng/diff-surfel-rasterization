@@ -456,7 +456,7 @@ __device__ void compute_transmat_aabb(
 	const int W, const int H, 
 	const float3* dL_dnormals,
 	const float3* dL_dmean2Ds, 
-	float* dL_dTs, 
+	const float* dL_dTs, 
 	glm::vec3* dL_dmeans, 
 	glm::vec2* dL_dscales,
 	 glm::vec4* dL_drots)
@@ -574,7 +574,7 @@ __global__ void preprocessCUDA(
 	const float tan_fovy,
 	const glm::vec3* campos, 
 	// grad input
-	float* dL_dtransMats,
+	const float* dL_dtransMats,
 	const float* dL_dnormal3Ds,
 	float* dL_dcolors,
 	float* dL_dshs,
@@ -628,7 +628,7 @@ void BACKWARD::preprocess(
 	const glm::vec3* campos, 
 	float3* dL_dmean2Ds,
 	const float* dL_dnormal3Ds,
-	float* dL_dtransMats,
+	const float* dL_dtransMats,
 	float* dL_dcolors,
 	float* dL_dshs,
 	glm::vec3* dL_dmean3Ds,

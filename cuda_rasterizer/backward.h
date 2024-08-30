@@ -59,7 +59,7 @@ namespace BACKWARD
 		const glm::vec3* campos,
 		float3* dL_dmean2D,
 		const float* dL_dnormal3D,
-		float* dL_dtransMat,
+		const float* dL_dtransMat,
 		float* dL_dcolor,
 		float* dL_dsh,
 		glm::vec3* dL_dmeans,
