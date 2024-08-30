@@ -154,8 +154,6 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const float* opacities,
 	const float* shs,
 	bool* clamped,
-	const float* transMat_precomp,
-	const float* colors_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
 	const glm::vec3* cam_pos,
@@ -169,8 +167,8 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float* rgb,
 	float4* normal_opacity,
 	const dim3 grid,
-	uint32_t* tiles_touched,
-	bool prefiltered)
+	uint32_t* tiles_touched
+	)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P)
@@ -183,28 +181,17 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 	// Perform near culling, quit if outside.
 	float3 p_view;
-	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
+	if (!in_frustum(idx, orig_points, viewmatrix, p_view))
 		return;
 	
 	// Compute transformation matrix
 	glm::mat3 T;
 	float3 normal;
-	if (transMat_precomp == nullptr)
-	{
-		compute_transmat(((float3*)orig_points)[idx], scales[idx], scale_modifier, rotations[idx], projmatrix, viewmatrix, W, H, T, normal);
-		float3 *T_ptr = (float3*)transMats;
-		T_ptr[idx * 3 + 0] = {T[0][0], T[0][1], T[0][2]};
-		T_ptr[idx * 3 + 1] = {T[1][0], T[1][1], T[1][2]};
-		T_ptr[idx * 3 + 2] = {T[2][0], T[2][1], T[2][2]};
-	} else {
-		glm::vec3 *T_ptr = (glm::vec3*)transMat_precomp;
-		T = glm::mat3(
-			T_ptr[idx * 3 + 0], 
-			T_ptr[idx * 3 + 1],
-			T_ptr[idx * 3 + 2]
-		);
-		normal = make_float3(0.0, 0.0, 1.0);
-	}
+	compute_transmat(((float3*)orig_points)[idx], scales[idx], scale_modifier, rotations[idx], projmatrix, viewmatrix, W, H, T, normal);
+	float3 *T_ptr = (float3*)transMats;
+	T_ptr[idx * 3 + 0] = {T[0][0], T[0][1], T[0][2]};
+	T_ptr[idx * 3 + 1] = {T[1][0], T[1][1], T[1][2]};
+	T_ptr[idx * 3 + 2] = {T[2][0], T[2][1], T[2][2]};
 
 #if DUAL_VISIABLE
 	float cos = -sumf3(p_view * normal);
@@ -236,12 +223,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		return;
 
 	// Compute colors 
-	if (colors_precomp == nullptr) {
-		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
-		rgb[idx * C + 0] = result.x;
-		rgb[idx * C + 1] = result.y;
-		rgb[idx * C + 2] = result.z;
-	}
+	glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
+	rgb[idx * C + 0] = result.x;
+	rgb[idx * C + 1] = result.y;
+	rgb[idx * C + 2] = result.z;
 
 	depths[idx] = p_view.z;
 	radii[idx] = (int)radius;
@@ -489,8 +474,6 @@ void FORWARD::preprocess(int P, int D, int M,
 	const float* opacities,
 	const float* shs,
 	bool* clamped,
-	const float* transMat_precomp,
-	const float* colors_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
 	const glm::vec3* cam_pos,
@@ -504,8 +487,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	float* rgb,
 	float4* normal_opacity,
 	const dim3 grid,
-	uint32_t* tiles_touched,
-	bool prefiltered)
+	uint32_t* tiles_touched)
 {
 	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
 		P, D, M,
@@ -516,8 +498,6 @@ void FORWARD::preprocess(int P, int D, int M,
 		opacities,
 		shs,
 		clamped,
-		transMat_precomp,
-		colors_precomp,
 		viewmatrix, 
 		projmatrix,
 		cam_pos,
@@ -531,7 +511,6 @@ void FORWARD::preprocess(int P, int D, int M,
 		rgb,
 		normal_opacity,
 		grid,
-		tiles_touched,
-		prefiltered
+		tiles_touched
 		);
 }

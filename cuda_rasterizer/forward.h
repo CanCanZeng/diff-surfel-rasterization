@@ -29,8 +29,6 @@ namespace FORWARD
 		const float* opacities,
 		const float* shs,
 		bool* clamped,
-		const float* transMat_precomp,
-		const float* colors_precomp,
 		const float* viewmatrix,
 		const float* projmatrix,
 		const glm::vec3* cam_pos,
@@ -46,8 +44,7 @@ namespace FORWARD
 		float* colors,
 		float4* normal_opacity,
 		const dim3 grid,
-		uint32_t* tiles_touched,
-		bool prefiltered);
+		uint32_t* tiles_touched);
 
 	// Main rasterization method.
 	void render(

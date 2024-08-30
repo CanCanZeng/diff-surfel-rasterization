@@ -448,7 +448,6 @@ renderCUDA(
 
 __device__ void compute_transmat_aabb(
 	int idx, 
-	const float* Ts_precomp,
 	const float3* p_origs, 
 	const glm::vec2* scales, 
 	const glm::vec4* rots, 
@@ -472,14 +471,7 @@ __device__ void compute_transmat_aabb(
 	glm::vec2 scale;
 	
 	// Get transformation matrix of the Gaussian
-	if (Ts_precomp != nullptr) {
-		T = glm::mat3(
-			Ts_precomp[idx * 9 + 0], Ts_precomp[idx * 9 + 1], Ts_precomp[idx * 9 + 2],
-			Ts_precomp[idx * 9 + 3], Ts_precomp[idx * 9 + 4], Ts_precomp[idx * 9 + 5],
-			Ts_precomp[idx * 9 + 6], Ts_precomp[idx * 9 + 7], Ts_precomp[idx * 9 + 8]
-		);
-		normal = {0.0, 0.0, 0.0};
-	} else {
+	{
 		p_orig = p_origs[idx];
 		rot = rots[idx];
 		scale = scales[idx];
@@ -533,22 +525,7 @@ __device__ void compute_transmat_aabb(
 		dL_dT[0] += dL_dT0;
 		dL_dT[1] += dL_dT1;
 		dL_dT[2] += dL_dT3;
-
-		if (Ts_precomp != nullptr) {
-			dL_dTs[idx * 9 + 0] = dL_dT[0].x;
-			dL_dTs[idx * 9 + 1] = dL_dT[0].y;
-			dL_dTs[idx * 9 + 2] = dL_dT[0].z;
-			dL_dTs[idx * 9 + 3] = dL_dT[1].x;
-			dL_dTs[idx * 9 + 4] = dL_dT[1].y;
-			dL_dTs[idx * 9 + 5] = dL_dT[1].z;
-			dL_dTs[idx * 9 + 6] = dL_dT[2].x;
-			dL_dTs[idx * 9 + 7] = dL_dT[2].y;
-			dL_dTs[idx * 9 + 8] = dL_dT[2].z;
-			return;
-		}
 	}
-	
-	if (Ts_precomp != nullptr) return;
 
 	// Update gradients w.r.t. scaling, rotation, position of the Gaussian
 	glm::mat3x4 dL_dM = P * glm::transpose(dL_dT);
@@ -612,10 +589,8 @@ __global__ void preprocessCUDA(
 
 	const int W = int(focal_x * tan_fovx * 2);
 	const int H = int(focal_y * tan_fovy * 2);
-	const float * Ts_precomp = (scales) ? nullptr : transMats;
 	compute_transmat_aabb(
 		idx, 
-		Ts_precomp,
 		means3D, scales, rotations, 
 		projmatrix, viewmatrix, W, H, 
 		(float3*)dL_dnormal3Ds, 

@@ -62,7 +62,7 @@ __global__ void checkFrustum(int P,
 		return;
 
 	float3 p_view;
-	present[idx] = in_frustum(idx, orig_points, viewmatrix, projmatrix, false, p_view);
+	present[idx] = in_frustum(idx, orig_points, viewmatrix, p_view);
 }
 
 // Generates one key/value pair for all Gaussian / tile overlaps. 
@@ -204,17 +204,14 @@ int CudaRasterizer::Rasterizer::forward(
 	const int width, int height,
 	const float* means3D,
 	const float* shs,
-	const float* colors_precomp,
 	const float* opacities,
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
-	const float* transMat_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
 	const float* cam_pos,
 	const float tan_fovx, float tan_fovy,
-	const bool prefiltered,
 	float* out_color,
 	float* out_others,
 	int* radii,
@@ -240,11 +237,6 @@ int CudaRasterizer::Rasterizer::forward(
 	char* img_chunkptr = imageBuffer(img_chunk_size);
 	ImageState imgState = ImageState::fromChunk(img_chunkptr, width * height);
 
-	if (NUM_CHANNELS != 3 && colors_precomp == nullptr)
-	{
-		throw std::runtime_error("For non-RGB, provide precomputed Gaussian colors!");
-	}
-
 	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
 	CHECK_CUDA(FORWARD::preprocess(
 		P, D, M,
@@ -255,8 +247,6 @@ int CudaRasterizer::Rasterizer::forward(
 		opacities,
 		shs,
 		geomState.clamped,
-		transMat_precomp,
-		colors_precomp,
 		viewmatrix, projmatrix,
 		(glm::vec3*)cam_pos,
 		width, height,
@@ -269,8 +259,7 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.rgb,
 		geomState.normal_opacity,
 		tile_grid,
-		geomState.tiles_touched,
-		prefiltered
+		geomState.tiles_touched
 	), debug)
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
@@ -319,8 +308,8 @@ int CudaRasterizer::Rasterizer::forward(
 	CHECK_CUDA(, debug)
 
 	// Let each tile blend its range of Gaussians independently in parallel
-	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
-	const float* transMat_ptr = transMat_precomp != nullptr ? transMat_precomp : geomState.transMat;
+	const float* feature_ptr = geomState.rgb;
+	const float* transMat_ptr = geomState.transMat;
 	CHECK_CUDA(FORWARD::render(
 		tile_grid, block,
 		imgState.ranges,
@@ -349,11 +338,9 @@ void CudaRasterizer::Rasterizer::backward(
 	const int width, int height,
 	const float* means3D,
 	const float* shs,
-	const float* colors_precomp,
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
-	const float* transMat_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
 	const float* campos,
@@ -392,10 +379,9 @@ void CudaRasterizer::Rasterizer::backward(
 
 	// Compute loss gradients w.r.t. 2D mean position, conic matrix,
 	// opacity and RGB of Gaussians from per-pixel loss gradients.
-	// If we were given precomputed colors and not SHs, use them.
-	const float* color_ptr = (colors_precomp != nullptr) ? colors_precomp : geomState.rgb;
+	const float* color_ptr = geomState.rgb;
 	const float* depth_ptr = geomState.depths;
-	const float* transMat_ptr = (transMat_precomp != nullptr) ? transMat_precomp : geomState.transMat;
+	const float* transMat_ptr = geomState.transMat;
 	CHECK_CUDA(BACKWARD::render(
 		tile_grid,
 		block,
@@ -419,10 +405,6 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dopacity,
 		dL_dcolor), debug)
 
-	// Take care of the rest of preprocessing. Was the precomputed covariance
-	// given to us or a scales/rot pair? If precomputed, pass that. If not,
-	// use the one we computed ourselves.
-	// const float* transMat_ptr = (transMat_precomp != nullptr) ? transMat_precomp : geomState.transMat;
 	CHECK_CUDA(BACKWARD::preprocess(P, D, M,
 		(float3*)means3D,
 		radii,

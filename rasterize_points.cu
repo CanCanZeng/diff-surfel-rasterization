@@ -40,12 +40,10 @@ std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torc
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
-	const torch::Tensor& colors,
 	const torch::Tensor& opacity,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
 	const float scale_modifier,
-	const torch::Tensor& transMat_precomp,
 	const torch::Tensor& viewmatrix,
 	const torch::Tensor& projmatrix,
 	const float tan_fovx, 
@@ -55,7 +53,6 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& sh,
 	const int degree,
 	const torch::Tensor& campos,
-	const bool prefiltered,
 	const bool debug)
 {
   if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
@@ -69,11 +66,9 @@ RasterizeGaussiansCUDA(
 
   CHECK_INPUT(background);
   CHECK_INPUT(means3D);
-  CHECK_INPUT(colors);
   CHECK_INPUT(opacity);
   CHECK_INPUT(scales);
   CHECK_INPUT(rotations);
-  CHECK_INPUT(transMat_precomp);
   CHECK_INPUT(viewmatrix);
   CHECK_INPUT(projmatrix);
   CHECK_INPUT(sh);
@@ -113,18 +108,15 @@ RasterizeGaussiansCUDA(
 		W, H,
 		means3D.contiguous().data<float>(),
 		sh.contiguous().data_ptr<float>(),
-		colors.contiguous().data<float>(), 
 		opacity.contiguous().data<float>(), 
 		scales.contiguous().data_ptr<float>(),
 		scale_modifier,
 		rotations.contiguous().data_ptr<float>(),
-		transMat_precomp.contiguous().data<float>(), 
 		viewmatrix.contiguous().data<float>(), 
 		projmatrix.contiguous().data<float>(),
 		campos.contiguous().data<float>(),
 		tan_fovx,
 		tan_fovy,
-		prefiltered,
 		out_color.contiguous().data<float>(),
 		out_others.contiguous().data<float>(),
 		radii.contiguous().data<int>(),
@@ -133,16 +125,14 @@ RasterizeGaussiansCUDA(
   return std::make_tuple(rendered, out_color, out_others, radii, geomBuffer, binningBuffer, imgBuffer);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
  RasterizeGaussiansBackwardCUDA(
 	 const torch::Tensor& background,
 	const torch::Tensor& means3D,
 	const torch::Tensor& radii,
-	const torch::Tensor& colors,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
 	const float scale_modifier,
-	const torch::Tensor& transMat_precomp,
 	const torch::Tensor& viewmatrix,
 	const torch::Tensor& projmatrix,
 	const float tan_fovx,
@@ -162,10 +152,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   CHECK_INPUT(background);
   CHECK_INPUT(means3D);
   CHECK_INPUT(radii);
-  CHECK_INPUT(colors);
   CHECK_INPUT(scales);
   CHECK_INPUT(rotations);
-  CHECK_INPUT(transMat_precomp);
   CHECK_INPUT(viewmatrix);
   CHECK_INPUT(projmatrix);
   CHECK_INPUT(sh);
@@ -201,11 +189,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  W, H, 
 	  means3D.contiguous().data<float>(),
 	  sh.contiguous().data<float>(),
-	  colors.contiguous().data<float>(),
 	  scales.data_ptr<float>(),
 	  scale_modifier,
 	  rotations.data_ptr<float>(),
-	  transMat_precomp.contiguous().data<float>(),
 	  viewmatrix.contiguous().data<float>(),
 	  projmatrix.contiguous().data<float>(),
 	  campos.contiguous().data<float>(),
@@ -229,7 +215,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  debug);
   }
 
-  return std::make_tuple(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dtransMat, dL_dsh, dL_dscales, dL_drotations);
+  return std::make_tuple(dL_dmeans2D, dL_dopacity, dL_dmeans3D, dL_dsh, dL_dscales, dL_drotations);
 }
 
 torch::Tensor markVisible(
