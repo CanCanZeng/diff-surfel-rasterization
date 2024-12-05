@@ -75,6 +75,7 @@ namespace CudaRasterizer
 			float* dL_dcolor,
 			float* dL_dmean3D,
 			float* dL_dtransMat,
+			float* dL_dtransMat_abs,
 			float* dL_dsh,
 			float* dL_dscale,
 			float* dL_drot,

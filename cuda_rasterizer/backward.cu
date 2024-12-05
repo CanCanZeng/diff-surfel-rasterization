@@ -158,7 +158,8 @@ renderCUDA(
 	const float* __restrict__ dL_dpixels,
 	const float* __restrict__ dL_depths,
 	float * __restrict__ dL_dtransMat,
-	float3* __restrict__ dL_dmean2D,
+	float * __restrict__ dL_dtransMat_abs,
+	float4* __restrict__ dL_dmean2D,
 	float* __restrict__ dL_dnormal3D,
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dcolors)
@@ -427,6 +428,16 @@ renderCUDA(
 				atomicAdd(&dL_dtransMat[global_id * 9 + 6],  dL_dTw.x);
 				atomicAdd(&dL_dtransMat[global_id * 9 + 7],  dL_dTw.y);
 				atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dTw.z);
+
+				atomicAdd(&dL_dtransMat_abs[global_id * 9 + 0],  fabs(dL_dTu.x));
+				atomicAdd(&dL_dtransMat_abs[global_id * 9 + 1],  fabs(dL_dTu.y));
+				atomicAdd(&dL_dtransMat_abs[global_id * 9 + 2],  fabs(dL_dTu.z));
+				atomicAdd(&dL_dtransMat_abs[global_id * 9 + 3],  fabs(dL_dTv.x));
+				atomicAdd(&dL_dtransMat_abs[global_id * 9 + 4],  fabs(dL_dTv.y));
+				atomicAdd(&dL_dtransMat_abs[global_id * 9 + 5],  fabs(dL_dTv.z));
+				atomicAdd(&dL_dtransMat_abs[global_id * 9 + 6],  fabs(dL_dTw.x));
+				atomicAdd(&dL_dtransMat_abs[global_id * 9 + 7],  fabs(dL_dTw.y));
+				atomicAdd(&dL_dtransMat_abs[global_id * 9 + 8],  fabs(dL_dTw.z));
 			} else {
 				// // Update gradients w.r.t. center of Gaussian 2D mean position
 				const float dG_ddelx = -G * FilterInvSquare * d.x;
@@ -437,6 +448,10 @@ renderCUDA(
 				atomicAdd(&dL_dtransMat[global_id * 9 + 6],  s.x * dL_dz);
 				atomicAdd(&dL_dtransMat[global_id * 9 + 7],  s.y * dL_dz);
 				atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dz);
+
+				atomicAdd(&dL_dtransMat_abs[global_id * 9 + 6],  fabs(s.x * dL_dz));
+				atomicAdd(&dL_dtransMat_abs[global_id * 9 + 7],  fabs(s.y * dL_dz));
+				atomicAdd(&dL_dtransMat_abs[global_id * 9 + 8],  fabs(dL_dz));
 			}
 
 			// Update gradients w.r.t. opacity of the Gaussian
@@ -455,7 +470,7 @@ __device__ void compute_transmat_aabb(
 	const float* viewmatrix, 
 	const int W, const int H, 
 	const float3* dL_dnormals,
-	const float3* dL_dmean2Ds, 
+	const float4* dL_dmean2Ds, 
 	const float* dL_dTs, 
 	glm::vec3* dL_dmeans, 
 	glm::vec2* dL_dscales,
@@ -509,7 +524,7 @@ __device__ void compute_transmat_aabb(
 		dL_dTs[idx*9+3], dL_dTs[idx*9+4], dL_dTs[idx*9+5],
 		dL_dTs[idx*9+6], dL_dTs[idx*9+7], dL_dTs[idx*9+8]
 	);
-	float3 dL_dmean2D = dL_dmean2Ds[idx];
+	float4 dL_dmean2D = dL_dmean2Ds[idx];
 	if(dL_dmean2D.x != 0 || dL_dmean2D.y != 0)
 	{
 		glm::vec3 t_vec = glm::vec3(9.0f, 9.0f, -1.0f);
@@ -575,10 +590,11 @@ __global__ void preprocessCUDA(
 	const glm::vec3* campos, 
 	// grad input
 	const float* dL_dtransMats,
+	const float* dL_dtransMats_abs,
 	const float* dL_dnormal3Ds,
 	float* dL_dcolors,
 	float* dL_dshs,
-	float3* dL_dmean2Ds,
+	float4* dL_dmean2Ds,
 	glm::vec3* dL_dmean3Ds,
 	glm::vec2* dL_dscales,
 	glm::vec4* dL_drots)
@@ -608,6 +624,8 @@ __global__ void preprocessCUDA(
 	float depth = transMats[idx * 9 + 8];
 	dL_dmean2Ds[idx].x = dL_dtransMats[idx * 9 + 2] * depth * 0.5 * float(W); // to ndc 
 	dL_dmean2Ds[idx].y = dL_dtransMats[idx * 9 + 5] * depth * 0.5 * float(H); // to ndc
+	dL_dmean2Ds[idx].z = dL_dtransMats_abs[idx * 9 + 2] * depth * 0.5 * float(W); // to ndc 
+	dL_dmean2Ds[idx].w = dL_dtransMats_abs[idx * 9 + 5] * depth * 0.5 * float(H); // to ndc
 }
 
 
@@ -626,9 +644,10 @@ void BACKWARD::preprocess(
 	const float focal_x, const float focal_y,
 	const float tan_fovx, const float tan_fovy,
 	const glm::vec3* campos, 
-	float3* dL_dmean2Ds,
+	float4* dL_dmean2Ds,
 	const float* dL_dnormal3Ds,
 	const float* dL_dtransMats,
+	const float* dL_dtransMats_abs,
 	float* dL_dcolors,
 	float* dL_dshs,
 	glm::vec3* dL_dmean3Ds,
@@ -653,6 +672,7 @@ void BACKWARD::preprocess(
 		tan_fovy,
 		campos,	
 		dL_dtransMats,
+		dL_dtransMats_abs,
 		dL_dnormal3Ds,
 		dL_dcolors,
 		dL_dshs,
@@ -680,7 +700,8 @@ void BACKWARD::render(
 	const float* dL_dpixels,
 	const float* dL_depths,
 	float * dL_dtransMat,
-	float3* dL_dmean2D,
+	float * dL_dtransMat_abs,
+	float4* dL_dmean2D,
 	float* dL_dnormal3D,
 	float* dL_dopacity,
 	float* dL_dcolors)
@@ -701,6 +722,7 @@ void BACKWARD::render(
 		dL_dpixels,
 		dL_depths,
 		dL_dtransMat,
+		dL_dtransMat_abs,
 		dL_dmean2D,
 		dL_dnormal3D,
 		dL_dopacity,
